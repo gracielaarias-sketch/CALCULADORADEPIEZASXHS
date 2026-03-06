@@ -37,14 +37,17 @@ if url_ingresada:
         df['Total_Piezas_Fabricadas'] = df['Buenas'] + df['Retrabajo'] + df['Observadas']
         df['Horas'] = df['Tiempo Producción (Min)'] / 60
         
+        # Rendimiento individual (para la pestaña 2)
         df['Piezas_por_Hora_Real'] = np.where(df['Horas'] > 0, df['Total_Piezas_Fabricadas'] / df['Horas'], 0)
 
         # ==========================================
-        # 2. CUADRO 1: GENERAL POR CANTIDAD DE PRODUCTOS
+        # 2. CUADRO 1: GENERAL POR CANTIDAD DE PRODUCTOS (CORREGIDO SIMULTÁNEO)
         # ==========================================
         despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora_Real', 'Orden_Hora']).agg(
             Total_Piezas=('Total_Piezas_Fabricadas', 'sum'),
-            Total_Horas=('Horas', 'sum'),
+            # CAMBIO CLAVE: Tomamos el 'max' de horas en lugar del 'sum' para no duplicar 
+            # el tiempo si hay productos simultáneos.
+            Total_Horas=('Horas', 'max'), 
             Cantidad_Productos=('Código Producto', 'nunique')
         ).reset_index()
 
@@ -107,8 +110,6 @@ if url_ingresada:
 
         with tab2:
             st.subheader("Rendimiento por Código de Producto: Real vs Estimado")
-            
-            # NUEVO: Formateamos específicamente las columnas numéricas para que SIEMPRE tengan 2 decimales
             formato_decimales = "{:.2f}"
             columnas_a_formatear = ['Real_Pzs_Hora', 'Estimado_Pzs_Hora', 'Diferencia']
             
@@ -173,7 +174,7 @@ if url_ingresada:
         pdf.ln(5)
         
         pdf.set_font("Arial", "B", 14)
-        pdf.cell(190, 10, txt="1. Rendimiento General (Por N. de Productos)", ln=True)
+        pdf.cell(190, 10, txt="1. Rendimiento General (Por N. de Productos Simultáneos)", ln=True)
         pdf.set_font("Arial", "B", 10)
         pdf.set_fill_color(*COLOR_FONDO_TABLA)
         pdf.set_text_color(0, 0, 0)
@@ -211,7 +212,6 @@ if url_ingresada:
             pdf.cell(40, 8, str(fila['Máquina'])[:15], border=1, align='C')
             pdf.cell(60, 8, str(fila['Código Producto'])[:25], border=1, align='C')
             
-            # NUEVO: Forzamos la impresión de 2 decimales en el PDF
             real_formateado = f"{fila['Real_Pzs_Hora']:.2f}"
             estimado_formateado = f"{fila['Estimado_Pzs_Hora']:.2f}"
             
@@ -226,7 +226,6 @@ if url_ingresada:
             else:
                 pdf.set_text_color(0, 0, 0)
                 
-            # Agregamos el signo y formateamos a 2 decimales
             texto_diferencia = f"+{diferencia_val:.2f}" if diferencia_val > 0 else f"{diferencia_val:.2f}"
             pdf.cell(30, 8, texto_diferencia, border=1, align='C')
             
@@ -259,7 +258,6 @@ if url_ingresada:
             for index, fila in datos_maq_pdf.iterrows():
                 pdf.cell(80, 8, str(fila['Máquina']), border=1, align='C')
                 pdf.cell(40, 8, f"{fila['Hora_Real']}:00", border=1, align='C')
-                # Formateamos a 2 decimales también aquí por consistencia
                 pdf.cell(50, 8, f"{fila['Promedio_Historico']:.2f}", border=1, align='C')
                 pdf.ln()
                 
