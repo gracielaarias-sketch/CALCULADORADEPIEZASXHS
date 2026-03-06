@@ -22,7 +22,7 @@ if url_ingresada:
             st.dataframe(df, use_container_width=True)
 
         # ==========================================
-        # 1. LIMPIEZA Y CÁLCULOS BASE (FILA POR FILA)
+        # 1. LIMPIEZA Y CÁLCULOS BASE
         # ==========================================
         columnas_num = ['Buenas', 'Retrabajo', 'Observadas', 'Tiempo Producción (Min)', 'Tiempo Ciclo', 'Hora']
         for col in columnas_num:
@@ -36,14 +36,12 @@ if url_ingresada:
         df['Total_Piezas_Fabricadas'] = df['Buenas'] + df['Retrabajo'] + df['Observadas']
         df['Horas'] = df['Tiempo Producción (Min)'] / 60
         
-        # Rendimiento real y estimado fila por fila (para la tabla de productos)
+        # Rendimiento real fila por fila
         df['Piezas_por_Hora_Real'] = np.where(df['Horas'] > 0, df['Total_Piezas_Fabricadas'] / df['Horas'], 0)
-        df['Piezas_Estimadas_Hora'] = np.where(df['Tiempo Ciclo'] > 0, 60 / df['Tiempo Ciclo'], 0)
 
         # ==========================================
         # 2. CUADRO 1: GENERAL POR CANTIDAD DE PRODUCTOS (1, 2, 3)
         # ==========================================
-        # Primero agrupamos hora a hora para contar cuántos productos simultáneos hubo
         despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora_Real', 'Orden_Hora']).agg(
             Total_Piezas=('Total_Piezas_Fabricadas', 'sum'),
             Total_Horas=('Horas', 'sum'),
@@ -53,21 +51,31 @@ if url_ingresada:
         despliegue_hora['Pzs_Hora_Bloque'] = np.where(despliegue_hora['Total_Horas'] > 0, despliegue_hora['Total_Piezas'] / despliegue_hora['Total_Horas'], 0)
         despliegue_hora = despliegue_hora[(despliegue_hora['Cantidad_Productos'].isin([1, 2, 3])) & (despliegue_hora['Pzs_Hora_Bloque'] > 0)]
 
-        # Volvemos al cálculo original para el general
         resumen_general = despliegue_hora.groupby(['Máquina', 'Cantidad_Productos']).agg(
             Promedio_General_Pzs_Hora=('Pzs_Hora_Bloque', 'mean')
         ).reset_index().round(2)
 
         # ==========================================
-        # 3. CUADRO 2: COMPARATIVA REAL VS ESTIMADO POR PRODUCTO
+        # 3. CUADRO 2: COMPARATIVA REAL VS ESTIMADO POR PRODUCTO (CORREGIDO)
         # ==========================================
-        # Filtramos los datos válidos para sacar promedios limpios por cada código
+        # Filtramos los datos válidos
         df_validos = df[(df['Piezas_por_Hora_Real'] > 0) & (df['Código Producto'].notna()) & (df['Código Producto'] != '')]
         
+        # PASO 1: Sacamos el promedio de la producción real y el promedio del Tiempo Ciclo
         comparativa_productos = df_validos.groupby(['Máquina', 'Código Producto']).agg(
             Real_Pzs_Hora=('Piezas_por_Hora_Real', 'mean'),
-            Estimado_Pzs_Hora=('Piezas_Estimadas_Hora', 'mean')
-        ).reset_index().round(2)
+            Promedio_Tiempo_Ciclo=('Tiempo Ciclo', 'mean')
+        ).reset_index()
+
+        # PASO 2: Calculamos el estimado dividiendo 60 entre el promedio del tiempo ciclo
+        comparativa_productos['Estimado_Pzs_Hora'] = np.where(
+            comparativa_productos['Promedio_Tiempo_Ciclo'] > 0, 
+            60 / comparativa_productos['Promedio_Tiempo_Ciclo'], 
+            0
+        )
+        
+        # Limpiamos las columnas para mostrar y redondeamos
+        comparativa_productos = comparativa_productos[['Máquina', 'Código Producto', 'Real_Pzs_Hora', 'Estimado_Pzs_Hora']].round(2)
 
         # ==========================================
         # 4. CUADRO 3: HISTÓRICO POR HORA
@@ -97,7 +105,7 @@ if url_ingresada:
             
             # Gráfico Comparativo por Producto
             st.write("**Gráfico Comparativo (Primeros 15 productos para visualización):**")
-            datos_grafico = comparativa_productos.head(15) # Limitamos a 15 para que el gráfico no sea ilegible si hay muchos códigos
+            datos_grafico = comparativa_productos.head(15) 
             fig_prod, ax_prod = plt.subplots(figsize=(12, 6))
             x = np.arange(len(datos_grafico))
             width = 0.35
@@ -177,19 +185,19 @@ if url_ingresada:
         pdf.cell(50, 8, "Máquina", border=1, fill=True, align='C')
         pdf.cell(60, 8, "Código Producto", border=1, fill=True, align='C')
         pdf.cell(40, 8, "Real (Pzs/h)", border=1, fill=True, align='C')
-        pdf.cell(40, 8, "Estimado (Pzs/h)", border=1, fill=True, align='C')
+        pdf.cell(40, 8, "Estimado", border=1, fill=True, align='C')
         pdf.ln()
         
         pdf.set_font("Arial", "", 10)
         for index, fila in comparativa_productos.iterrows():
             pdf.cell(50, 8, str(fila['Máquina']), border=1, align='C')
-            pdf.cell(60, 8, str(fila['Código Producto'])[:25], border=1, align='C') # Límite de caracteres por si el código es muy largo
+            pdf.cell(60, 8, str(fila['Código Producto'])[:25], border=1, align='C')
             pdf.cell(40, 8, str(fila['Real_Pzs_Hora']), border=1, align='C')
             pdf.cell(40, 8, str(fila['Estimado_Pzs_Hora']), border=1, align='C')
             pdf.ln()
             
         pdf.ln(5)
-        pdf.image("grafico_productos.png", w=180) # Gráfico de los primeros 15 productos
+        pdf.image("grafico_productos.png", w=180) 
         
         # --- SECCIÓN 3: HISTÓRICO HORA A HORA ---
         pdf.add_page()
