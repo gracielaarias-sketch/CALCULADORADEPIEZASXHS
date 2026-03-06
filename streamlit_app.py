@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.subplots as plt_sub
 import matplotlib.pyplot as plt
 import os
 from fpdf import FPDF
@@ -168,7 +167,7 @@ if url_ingresada:
         COLOR_TITULO = (0, 51, 102)
         COLOR_FONDO_TABLA = (204, 229, 255)
         
-        # --- SECCIÓN 1: GENERAL ---
+        # --- SECCIÓN 1 Y 2: GENERAL Y PRODUCTOS ---
         pdf.add_page()
         pdf.set_font("Arial", "B", 18)
         pdf.set_text_color(*COLOR_TITULO)
@@ -212,6 +211,7 @@ if url_ingresada:
         
         pdf.set_font("Arial", "", 10)
         for index, fila in comparativa_productos.iterrows():
+            # Escribir primeras columnas
             pdf.cell(40, 8, str(fila['Máquina'])[:15], border=1, align='C')
             pdf.cell(60, 8, str(fila['Código Producto'])[:25], border=1, align='C')
             pdf.cell(30, 8, str(fila['Real_Pzs_Hora']), border=1, align='C')
@@ -227,7 +227,6 @@ if url_ingresada:
                 pdf.set_text_color(0, 0, 0)   # Negro
                 
             # Escribir celda de diferencia
-            # Usamos '+' para indicar los positivos si deseas, o simplemente mostramos el valor
             texto_diferencia = f"+{diferencia_val}" if diferencia_val > 0 else str(diferencia_val)
             pdf.cell(30, 8, texto_diferencia, border=1, align='C')
             
