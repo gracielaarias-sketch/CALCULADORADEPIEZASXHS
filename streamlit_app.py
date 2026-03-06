@@ -40,25 +40,35 @@ if url_ingresada:
         df['Piezas_por_Hora_Real'] = np.where(df['Horas'] > 0, df['Total_Piezas_Fabricadas'] / df['Horas'], 0)
 
         # ==========================================
-        # 2. CUADRO 1: GENERAL (MATEMÁTICA ORIGINAL + DETECCIÓN DE CHANGEOVER)
+        # 2. CUADRO 1: GENERAL (LÓGICA EXACTA DE TIEMPOS SIMULTÁNEOS)
         # ==========================================
-        despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora_Real', 'Orden_Hora']).agg(
-            Total_Piezas=('Total_Piezas_Fabricadas', 'sum'),
-            Total_Horas=('Horas', 'sum'), # VOLVIMOS A 'SUM' (CÁLCULO ORIGINAL CORRECTO)
-            Cantidad_Productos_Crudo=('Código Producto', 'nunique')
-        ).reset_index()
+        # Creamos una función personalizada que aplica tu regla de validación de minutos
+        def calcular_bloque_hora(g):
+            # 1. Sumamos todas las piezas de esa hora
+            total_piezas = g['Total_Piezas_Fabricadas'].sum()
+            
+            # 2. Validar Simultáneo vs Secuencial por Tiempo
+            # Agrupamos por el tiempo de producción para ver cuántos códigos comparten el mismo tiempo
+            productos_simultaneos = g.groupby('Horas')['Código Producto'].nunique().max()
+            
+            # Limitamos físicamente a 3 productos máximo
+            cantidad_productos = min(productos_simultaneos, 3)
+            
+            # 3. El tiempo total es la suma de los tiempos ÚNICOS
+            # Ej simultáneo: [60, 60] -> único es 60. (Suma = 60 min reales)
+            # Ej secuencial: [40, 20] -> únicos son 40, 20. (Suma = 60 min reales)
+            total_horas = g['Horas'].unique().sum()
+            
+            return pd.Series({
+                'Total_Piezas': total_piezas,
+                'Total_Horas': total_horas,
+                'Cantidad_Productos': cantidad_productos
+            })
 
-        # CLASIFICACIÓN INTELIGENTE:
-        # Si la suma de horas en esa hora física es menor a 1.05 (63 min), fue secuencial (Changeover).
-        # Lo clasificamos como 1 solo producto para no distorsionar la tabla. 
-        # Si es mayor, se respeta la cantidad real porque fueron simultáneos.
-        despliegue_hora['Cantidad_Productos'] = np.where(
-            despliegue_hora['Total_Horas'] <= 1.05, 
-            1, 
-            despliegue_hora['Cantidad_Productos_Crudo']
-        )
+        # Aplicamos la función bloque por bloque
+        despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora_Real', 'Orden_Hora']).apply(calcular_bloque_hora).reset_index()
 
-        # Matemática original: Total Piezas / Total Horas (Suma)
+        # Matemática original validada
         despliegue_hora['Pzs_Hora_Bloque'] = np.where(despliegue_hora['Total_Horas'] > 0, despliegue_hora['Total_Piezas'] / despliegue_hora['Total_Horas'], 0)
         
         despliegue_hora = despliegue_hora[(despliegue_hora['Cantidad_Productos'].isin([1, 2, 3])) & (despliegue_hora['Pzs_Hora_Bloque'] > 0)]
@@ -105,7 +115,7 @@ if url_ingresada:
         # ==========================================
         # 5. INTERFAZ GRÁFICA (PANTALLA)
         # ==========================================
-        st.success("¡Cálculos finalizados!")
+        st.success("¡Cálculos finalizados usando la validación de tiempos!")
         tab1, tab2, tab3, tab4 = st.tabs([
             "📈 1. General (Por N° Productos)", 
             "🎯 2. Real vs Estimado (Por Producto)", 
@@ -119,7 +129,6 @@ if url_ingresada:
 
         with tab2:
             st.subheader("Rendimiento por Código de Producto: Real vs Estimado")
-            
             formato_decimales = "{:.2f}"
             columnas_a_formatear = ['Real_Pzs_Hora', 'Estimado_Pzs_Hora', 'Diferencia']
             
