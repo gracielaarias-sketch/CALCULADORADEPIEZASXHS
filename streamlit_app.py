@@ -8,6 +8,7 @@ from fpdf import FPDF
 st.set_page_config(page_title="Panel de Producción", layout="wide")
 st.title("📊 Análisis de Producción y Rendimiento por Producto")
 
+# Pedimos el link al usuario
 url_ingresada = st.text_input("Pega aquí el enlace de tu Google Sheet:")
 
 if url_ingresada:
@@ -22,11 +23,17 @@ if url_ingresada:
             st.dataframe(df, use_container_width=True)
 
         # ==========================================
-        # 1. LIMPIEZA Y CÁLCULOS BASE
+        # 1. LIMPIEZA Y CÁLCULOS BASE (CON CORRECCIÓN DE COMAS)
         # ==========================================
         columnas_num = ['Buenas', 'Retrabajo', 'Observadas', 'Tiempo Producción (Min)', 'Tiempo Ciclo', 'Hora']
+        
         for col in columnas_num:
             if col in df.columns:
+                # 1. Convertimos todo a texto temporalmente
+                df[col] = df[col].astype(str)
+                # 2. Reemplazamos las comas por puntos
+                df[col] = df[col].str.replace(',', '.', regex=False)
+                # 3. Convertimos a números reales
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
         # Ajuste de Hora (Para que el turno empiece a las 6)
@@ -56,7 +63,7 @@ if url_ingresada:
         ).reset_index().round(2)
 
         # ==========================================
-        # 3. CUADRO 2: COMPARATIVA REAL VS ESTIMADO POR PRODUCTO (CORREGIDO)
+        # 3. CUADRO 2: COMPARATIVA REAL VS ESTIMADO POR PRODUCTO
         # ==========================================
         # Filtramos los datos válidos
         df_validos = df[(df['Piezas_por_Hora_Real'] > 0) & (df['Código Producto'].notna()) & (df['Código Producto'] != '')]
@@ -119,6 +126,7 @@ if url_ingresada:
             ax_prod.legend()
             st.pyplot(fig_prod)
             fig_prod.savefig("grafico_productos.png", bbox_inches='tight')
+            plt.close(fig_prod) # Libera memoria
 
         with tab3:
             st.subheader("Rendimiento Histórico desde las 6:00 AM")
@@ -134,6 +142,7 @@ if url_ingresada:
             ax_hor.grid(True, linestyle='--', alpha=0.6)
             st.pyplot(fig_hor)
             fig_hor.savefig("grafico_hora.png", bbox_inches='tight')
+            plt.close(fig_hor) # Libera memoria
             
             st.dataframe(datos_maq[['Máquina', 'Hora_Real', 'Promedio_Historico']], use_container_width=True)
 
@@ -229,8 +238,11 @@ if url_ingresada:
         with open(nombre_pdf, "rb") as pdf_file:
             st.download_button("📥 Descargar Reporte Ejecutivo (PDF)", data=pdf_file, file_name=nombre_pdf, mime="application/pdf")
             
-        os.remove("grafico_productos.png")
-        os.remove("grafico_hora.png")
+        # Limpiamos las imágenes temporales
+        if os.path.exists("grafico_productos.png"):
+            os.remove("grafico_productos.png")
+        if os.path.exists("grafico_hora.png"):
+            os.remove("grafico_hora.png")
             
     except Exception as e:
         st.error(f"Error procesando los datos: {e}")
