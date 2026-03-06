@@ -24,8 +24,14 @@ if url_ingresada:
         # ==========================================
         # 1. LIMPIEZA Y CÁLCULOS BASE
         # ==========================================
-        # Eliminamos filas totalmente vacías que suelen venir al final de los Google Sheets
+        # Eliminamos filas totalmente vacías
         df = df.dropna(how='all')
+
+        # --- CORRECCIÓN 1: Limpieza estricta de la columna Máquina ---
+        # Convertimos a texto, quitamos espacios y filtramos "None" o vacíos
+        df['Máquina'] = df['Máquina'].astype(str).str.strip()
+        df = df[~df['Máquina'].isin(['nan', 'None', '', 'NaN'])]
+        # -------------------------------------------------------------
 
         columnas_num = ['Buenas', 'Retrabajo', 'Observadas', 'Tiempo Producción (Min)', 'Tiempo Ciclo', 'Hora']
         for col in columnas_num:
@@ -90,15 +96,17 @@ if url_ingresada:
         comp_prod = comp_prod[comp_prod['Suma_Horas'] > 0]
         comp_prod['Real_Pzs_Hora'] = comp_prod['Suma_Piezas'] / comp_prod['Suma_Horas']
 
-        
-        # Lógica de detección: > 10 asume segundos (3600s/h), <= 10 asume minutos (60m/h)
+        # --- CORRECCIÓN 2: Lógica de Tiempo de Ciclo ---
+        # Si el número es menor a 2 (ej. 0.175), asumimos que está en MINUTOS.
+        # Si es mayor o igual a 2, asumimos que está en SEGUNDOS.
         comp_prod['Estimado_Pzs_Hora'] = np.where(
-            comp_prod['Promedio_Tiempo_Ciclo'] > 10, 
-            3600 / comp_prod['Promedio_Tiempo_Ciclo'], # SEGUNDOS (Fix 342 pzs/h)
+            comp_prod['Promedio_Tiempo_Ciclo'] >= 2, 
+            3600 / comp_prod['Promedio_Tiempo_Ciclo'], # SEGUNDOS 
             np.where(comp_prod['Promedio_Tiempo_Ciclo'] > 0, 
                      60 / comp_prod['Promedio_Tiempo_Ciclo'], # MINUTOS
                      0)
         )
+        # -------------------------------------------------------------
         
         comp_prod['Diferencia'] = comp_prod['Real_Pzs_Hora'] - comp_prod['Estimado_Pzs_Hora']
         comp_prod = comp_prod[['Máquina', 'Código Producto', 'Real_Pzs_Hora', 'Estimado_Pzs_Hora', 'Diferencia']].round(2)
