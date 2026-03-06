@@ -56,7 +56,7 @@ if url_ingresada:
         ).reset_index().round(2)
 
         # ==========================================
-        # 3. CUADRO 2: COMPARATIVA REAL VS ESTIMADO (AÑADIDA DIFERENCIA)
+        # 3. CUADRO 2: COMPARATIVA REAL VS ESTIMADO
         # ==========================================
         df_validos = df[(df['Piezas_por_Hora_Real'] > 0) & (df['Código Producto'].notna()) & (df['Código Producto'] != '')]
         
@@ -71,13 +71,10 @@ if url_ingresada:
             0
         )
         
-        # NUEVA COLUMNA: Calculamos la diferencia
         comparativa_productos['Diferencia'] = comparativa_productos['Real_Pzs_Hora'] - comparativa_productos['Estimado_Pzs_Hora']
         
-        # Seleccionamos y redondeamos las columnas que queremos mostrar
         comparativa_productos = comparativa_productos[['Máquina', 'Código Producto', 'Real_Pzs_Hora', 'Estimado_Pzs_Hora', 'Diferencia']].round(2)
 
-        # FUNCIÓN PARA PINTAR LAS CELDAS EN STREAMLIT
         def color_diferencia(val):
             if val > 0:
                 return 'color: green'
@@ -111,13 +108,14 @@ if url_ingresada:
         with tab2:
             st.subheader("Rendimiento por Código de Producto: Real vs Estimado")
             
-            # Aplicamos el estilo de colores a la tabla usando Pandas Styler
+            # NUEVO: Formateamos específicamente las columnas numéricas para que SIEMPRE tengan 2 decimales
+            formato_decimales = "{:.2f}"
+            columnas_a_formatear = ['Real_Pzs_Hora', 'Estimado_Pzs_Hora', 'Diferencia']
+            
             try:
-                # Pandas 2.1.0 o superior
-                tabla_estilizada = comparativa_productos.style.map(color_diferencia, subset=['Diferencia'])
+                tabla_estilizada = comparativa_productos.style.map(color_diferencia, subset=['Diferencia']).format(formato_decimales, subset=columnas_a_formatear)
             except AttributeError:
-                # Versiones anteriores de Pandas
-                tabla_estilizada = comparativa_productos.style.applymap(color_diferencia, subset=['Diferencia'])
+                tabla_estilizada = comparativa_productos.style.applymap(color_diferencia, subset=['Diferencia']).format(formato_decimales, subset=columnas_a_formatear)
                 
             st.dataframe(tabla_estilizada, use_container_width=True)
             
@@ -167,7 +165,7 @@ if url_ingresada:
         COLOR_TITULO = (0, 51, 102)
         COLOR_FONDO_TABLA = (204, 229, 255)
         
-        # --- SECCIÓN 1 Y 2: GENERAL Y PRODUCTOS ---
+        # --- SECCIÓN 1: GENERAL ---
         pdf.add_page()
         pdf.set_font("Arial", "B", 18)
         pdf.set_text_color(*COLOR_TITULO)
@@ -188,12 +186,12 @@ if url_ingresada:
         for index, fila in resumen_general.iterrows():
             pdf.cell(80, 8, str(fila['Máquina']), border=1, align='C')
             pdf.cell(50, 8, str(fila['Cantidad_Productos']), border=1, align='C')
-            pdf.cell(60, 8, str(fila['Promedio_General_Pzs_Hora']), border=1, align='C')
+            pdf.cell(60, 8, f"{fila['Promedio_General_Pzs_Hora']:.2f}", border=1, align='C')
             pdf.ln()
             
         pdf.ln(10)
         
-        # --- SECCIÓN 2: REAL VS ESTIMADO POR PRODUCTO (CON DIFERENCIA A COLOR) ---
+        # --- SECCIÓN 2: REAL VS ESTIMADO POR PRODUCTO ---
         pdf.set_font("Arial", "B", 14)
         pdf.set_text_color(*COLOR_TITULO)
         pdf.cell(190, 10, txt="2. Rendimiento por Producto (Real vs Estimado)", ln=True)
@@ -201,7 +199,6 @@ if url_ingresada:
         pdf.set_fill_color(*COLOR_FONDO_TABLA)
         pdf.set_text_color(0, 0, 0)
         
-        # Ajustamos los anchos para que entre la 5ta columna en el ancho total de 190
         pdf.cell(40, 8, "Máquina", border=1, fill=True, align='C')
         pdf.cell(60, 8, "Código Producto", border=1, fill=True, align='C')
         pdf.cell(30, 8, "Real", border=1, fill=True, align='C')
@@ -211,33 +208,35 @@ if url_ingresada:
         
         pdf.set_font("Arial", "", 10)
         for index, fila in comparativa_productos.iterrows():
-            # Escribir primeras columnas
             pdf.cell(40, 8, str(fila['Máquina'])[:15], border=1, align='C')
             pdf.cell(60, 8, str(fila['Código Producto'])[:25], border=1, align='C')
-            pdf.cell(30, 8, str(fila['Real_Pzs_Hora']), border=1, align='C')
-            pdf.cell(30, 8, str(fila['Estimado_Pzs_Hora']), border=1, align='C')
             
-            # --- EVALUAR COLOR DE LA DIFERENCIA ---
+            # NUEVO: Forzamos la impresión de 2 decimales en el PDF
+            real_formateado = f"{fila['Real_Pzs_Hora']:.2f}"
+            estimado_formateado = f"{fila['Estimado_Pzs_Hora']:.2f}"
+            
+            pdf.cell(30, 8, real_formateado, border=1, align='C')
+            pdf.cell(30, 8, estimado_formateado, border=1, align='C')
+            
             diferencia_val = fila['Diferencia']
             if diferencia_val > 0:
-                pdf.set_text_color(0, 150, 0) # Verde
+                pdf.set_text_color(0, 150, 0)
             elif diferencia_val < 0:
-                pdf.set_text_color(200, 0, 0) # Rojo
+                pdf.set_text_color(200, 0, 0)
             else:
-                pdf.set_text_color(0, 0, 0)   # Negro
+                pdf.set_text_color(0, 0, 0)
                 
-            # Escribir celda de diferencia
-            texto_diferencia = f"+{diferencia_val}" if diferencia_val > 0 else str(diferencia_val)
+            # Agregamos el signo y formateamos a 2 decimales
+            texto_diferencia = f"+{diferencia_val:.2f}" if diferencia_val > 0 else f"{diferencia_val:.2f}"
             pdf.cell(30, 8, texto_diferencia, border=1, align='C')
             
-            # Resetear a color negro para la siguiente fila
             pdf.set_text_color(0, 0, 0) 
             pdf.ln()
             
         pdf.ln(5)
         pdf.image("grafico_productos.png", w=180) 
         
-        # --- SECCIÓN 3: HISTÓRICO HORA A HORA (UNA HOJA POR MÁQUINA) ---
+        # --- SECCIÓN 3: HISTÓRICO HORA A HORA ---
         lista_todas_maquinas = promedio_por_hora['Máquina'].unique()
         
         for maquina_pdf in lista_todas_maquinas:
@@ -260,7 +259,8 @@ if url_ingresada:
             for index, fila in datos_maq_pdf.iterrows():
                 pdf.cell(80, 8, str(fila['Máquina']), border=1, align='C')
                 pdf.cell(40, 8, f"{fila['Hora_Real']}:00", border=1, align='C')
-                pdf.cell(50, 8, str(fila['Promedio_Historico']), border=1, align='C')
+                # Formateamos a 2 decimales también aquí por consistencia
+                pdf.cell(50, 8, f"{fila['Promedio_Historico']:.2f}", border=1, align='C')
                 pdf.ln()
                 
             pdf.ln(5)
