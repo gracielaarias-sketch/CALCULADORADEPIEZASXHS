@@ -40,27 +40,27 @@ if url_ingresada:
         df['Piezas_por_Hora_Real'] = np.where(df['Horas'] > 0, df['Total_Piezas_Fabricadas'] / df['Horas'], 0)
 
         # ==========================================
-        # 2. CUADRO 1: GENERAL (DETECCIÓN INTELIGENTE DE SIMULTÁNEO VS SECUENCIAL)
+        # 2. CUADRO 1: GENERAL (MATEMÁTICA ORIGINAL + DETECCIÓN DE CHANGEOVER)
         # ==========================================
         despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora_Real', 'Orden_Hora']).agg(
             Total_Piezas=('Total_Piezas_Fabricadas', 'sum'),
-            Total_Horas_Suma=('Horas', 'sum'),
-            Total_Horas_Max=('Horas', 'max'),
+            Total_Horas=('Horas', 'sum'), # VOLVIMOS A 'SUM' (CÁLCULO ORIGINAL CORRECTO)
             Cantidad_Productos_Crudo=('Código Producto', 'nunique')
         ).reset_index()
 
-        # Lógica Inteligente: Si la suma de tiempos en 1 bloque de hora supera 1.05h (63 minutos),
-        # asumimos producción simultánea. Si es menor, fue un cambio de producto (secuencial).
-        despliegue_hora['Es_Simultaneo'] = despliegue_hora['Total_Horas_Suma'] > 1.05
-        
-        # Si es simultáneo toma el tiempo máximo, si es secuencial toma la suma de los tiempos
-        despliegue_hora['Total_Horas'] = np.where(despliegue_hora['Es_Simultaneo'], despliegue_hora['Total_Horas_Max'], despliegue_hora['Total_Horas_Suma'])
-        
-        # Si es simultáneo toma la cantidad de códigos distintos, si es secuencial lo fuerza a 1 solo producto
-        despliegue_hora['Cantidad_Productos'] = np.where(despliegue_hora['Es_Simultaneo'], despliegue_hora['Cantidad_Productos_Crudo'], 1)
+        # CLASIFICACIÓN INTELIGENTE:
+        # Si la suma de horas en esa hora física es menor a 1.05 (63 min), fue secuencial (Changeover).
+        # Lo clasificamos como 1 solo producto para no distorsionar la tabla. 
+        # Si es mayor, se respeta la cantidad real porque fueron simultáneos.
+        despliegue_hora['Cantidad_Productos'] = np.where(
+            despliegue_hora['Total_Horas'] <= 1.05, 
+            1, 
+            despliegue_hora['Cantidad_Productos_Crudo']
+        )
 
-        # Calculamos la velocidad final de esa hora con los datos corregidos
+        # Matemática original: Total Piezas / Total Horas (Suma)
         despliegue_hora['Pzs_Hora_Bloque'] = np.where(despliegue_hora['Total_Horas'] > 0, despliegue_hora['Total_Piezas'] / despliegue_hora['Total_Horas'], 0)
+        
         despliegue_hora = despliegue_hora[(despliegue_hora['Cantidad_Productos'].isin([1, 2, 3])) & (despliegue_hora['Pzs_Hora_Bloque'] > 0)]
 
         resumen_general = despliegue_hora.groupby(['Máquina', 'Cantidad_Productos']).agg(
