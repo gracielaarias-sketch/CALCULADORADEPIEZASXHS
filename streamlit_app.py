@@ -45,29 +45,20 @@ if url_ingresada:
         df['Horas_Decimal'] = df['Tiempo Producción (Min)'] / 60
 
         # ==========================================
-        # 2. CUADRO 1: GENERAL (LÓGICA DE SIMULTANEIDAD CORREGIDA)
+        # 2. CUADRO 1: GENERAL 
         # ==========================================
-        # Ahora agrupamos también por 'Horas_Decimal' para separar las corridas 
-        # dentro de una misma hora según su duración.
         def calcular_sub_bloque(g):
             if g.empty:
                 return pd.Series({'Total_Piezas': 0.0, 'Total_Horas': 0.0, 'Cantidad_Productos': 0, 'Ciclos_Maquina': 0.0})
             
             total_piezas = float(g['Total_Piezas_Fabricadas'].sum())
-            
-            # Cantidad de productos que comparten exactamente la misma hora y el mismo tiempo de producción
             cantidad_productos = int(g['Código Producto'].nunique())
-            
-            # El tiempo de máquina no se suma, es simplemente el tiempo que duró este sub-bloque
             total_horas = float(g['Horas_Decimal'].iloc[0]) if not g.empty else 0.0
-            
-            # Ciclos reales
             ciclos_maquina = total_piezas / cantidad_productos if cantidad_productos > 0 else 0.0
             
             return pd.Series([total_piezas, total_horas, cantidad_productos, ciclos_maquina], 
                              index=['Total_Piezas', 'Total_Horas', 'Cantidad_Productos', 'Ciclos_Maquina'])
 
-        # Aplicamos la agrupación incluyendo Horas_Decimal
         despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora_Real', 'Orden_Hora', 'Horas_Decimal']).apply(calcular_sub_bloque).reset_index()
         despliegue_hora = despliegue_hora.dropna(subset=['Total_Piezas', 'Total_Horas', 'Cantidad_Productos'])
 
@@ -112,11 +103,11 @@ if url_ingresada:
         # ==========================================
         # 4. INTERFAZ Y PESTAÑAS
         # ==========================================
-        st.success("¡Cálculos finalizados! Lógica de simultaneidad ajustada al tiempo de producción.")
+        st.success("¡Cálculos finalizados!")
         tab1, tab2, tab3, tab4 = st.tabs(["📈 General", "🎯 Real vs Estimado", "⏰ Histórico", "📅 Bitácora"])
 
         with tab1:
-            st.subheader("Rendimiento Real por Máquina y Cavidades Activas")
+            st.subheader("Rendimiento Real por Máquina")
             st.dataframe(resumen_general, use_container_width=True)
 
         with tab2:
