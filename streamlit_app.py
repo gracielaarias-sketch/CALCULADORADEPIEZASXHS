@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.subplots as plt_sub
 import matplotlib.pyplot as plt
 import os
 from fpdf import FPDF
@@ -8,7 +9,9 @@ from fpdf import FPDF
 st.set_page_config(page_title="Panel de Producción", layout="wide")
 st.title("📊 Análisis de Producción y Rendimiento por Producto")
 
+# Pedimos el link al usuario
 url_ingresada = st.text_input("Pega aquí el enlace de tu Google Sheet:")
+st.markdown("*Debe ingresarse un archivo público para poder acceder a los datos.*")
 
 if url_ingresada:
     try:
@@ -17,9 +20,6 @@ if url_ingresada:
         
         st.info("Obteniendo y calculando datos...")
         df = pd.read_csv(url_csv)
-        
-        with st.expander("👀 Clic aquí para ver los datos originales (Fuente)"):
-            st.dataframe(df, use_container_width=True)
 
         # ==========================================
         # 1. LIMPIEZA Y CÁLCULOS BASE
@@ -32,7 +32,7 @@ if url_ingresada:
                 df[col] = df[col].str.replace(',', '.', regex=False)
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
-        df['Hora_Real'] = df['Hora'].apply(lambda x: int(x - 1) if x > 0 else 23)
+        df['Hora_Real'] = df['Hora'].astype(int)
         df['Orden_Hora'] = df['Hora_Real'].apply(lambda x: x if x >= 6 else x + 24)
 
         df['Total_Piezas_Fabricadas'] = df['Buenas'] + df['Retrabajo'] + df['Observadas']
@@ -57,7 +57,7 @@ if url_ingresada:
         ).reset_index().round(2)
 
         # ==========================================
-        # 3. CUADRO 2: COMPARATIVA REAL VS ESTIMADO
+        # 3. CUADRO 2: COMPARATIVA REAL VS ESTIMADO (AÑADIDA DIFERENCIA)
         # ==========================================
         df_validos = df[(df['Piezas_por_Hora_Real'] > 0) & (df['Código Producto'].notna()) & (df['Código Producto'] != '')]
         
@@ -71,7 +71,21 @@ if url_ingresada:
             60 / comparativa_productos['Promedio_Tiempo_Ciclo'], 
             0
         )
-        comparativa_productos = comparativa_productos[['Máquina', 'Código Producto', 'Real_Pzs_Hora', 'Estimado_Pzs_Hora']].round(2)
+        
+        # NUEVA COLUMNA: Calculamos la diferencia
+        comparativa_productos['Diferencia'] = comparativa_productos['Real_Pzs_Hora'] - comparativa_productos['Estimado_Pzs_Hora']
+        
+        # Seleccionamos y redondeamos las columnas que queremos mostrar
+        comparativa_productos = comparativa_productos[['Máquina', 'Código Producto', 'Real_Pzs_Hora', 'Estimado_Pzs_Hora', 'Diferencia']].round(2)
+
+        # FUNCIÓN PARA PINTAR LAS CELDAS EN STREAMLIT
+        def color_diferencia(val):
+            if val > 0:
+                return 'color: green'
+            elif val < 0:
+                return 'color: red'
+            else:
+                return 'color: black'
 
         # ==========================================
         # 4. CUADRO 3: HISTÓRICO POR HORA
@@ -97,7 +111,16 @@ if url_ingresada:
 
         with tab2:
             st.subheader("Rendimiento por Código de Producto: Real vs Estimado")
-            st.dataframe(comparativa_productos, use_container_width=True)
+            
+            # Aplicamos el estilo de colores a la tabla usando Pandas Styler
+            try:
+                # Pandas 2.1.0 o superior
+                tabla_estilizada = comparativa_productos.style.map(color_diferencia, subset=['Diferencia'])
+            except AttributeError:
+                # Versiones anteriores de Pandas
+                tabla_estilizada = comparativa_productos.style.applymap(color_diferencia, subset=['Diferencia'])
+                
+            st.dataframe(tabla_estilizada, use_container_width=True)
             
             st.write("**Gráfico Comparativo (Primeros 15 productos para visualización):**")
             datos_grafico = comparativa_productos.head(15) 
@@ -113,13 +136,12 @@ if url_ingresada:
             ax_prod.set_xticklabels(etiquetas, rotation=45, ha="right")
             ax_prod.legend()
             st.pyplot(fig_prod)
-            fig_prod.savefig("grafico_productos.png", bbox_inches='tight') # Se guarda para el PDF
+            fig_prod.savefig("grafico_productos.png", bbox_inches='tight') 
             plt.close(fig_prod)
 
         with tab3:
             st.subheader("Rendimiento Histórico desde las 6:00 AM")
             lista_maquinas = promedio_por_hora['Máquina'].unique()
-            # En la pantalla, el usuario solo ve la que selecciona
             maquina_seleccionada = st.selectbox("Máquina:", lista_maquinas)
             
             datos_maq_pantalla = promedio_por_hora[promedio_por_hora['Máquina'] == maquina_seleccionada]
@@ -146,7 +168,7 @@ if url_ingresada:
         COLOR_TITULO = (0, 51, 102)
         COLOR_FONDO_TABLA = (204, 229, 255)
         
-        # --- SECCIÓN 1 Y 2: GENERAL Y PRODUCTOS ---
+        # --- SECCIÓN 1: GENERAL ---
         pdf.add_page()
         pdf.set_font("Arial", "B", 18)
         pdf.set_text_color(*COLOR_TITULO)
@@ -172,24 +194,45 @@ if url_ingresada:
             
         pdf.ln(10)
         
+        # --- SECCIÓN 2: REAL VS ESTIMADO POR PRODUCTO (CON DIFERENCIA A COLOR) ---
         pdf.set_font("Arial", "B", 14)
         pdf.set_text_color(*COLOR_TITULO)
         pdf.cell(190, 10, txt="2. Rendimiento por Producto (Real vs Estimado)", ln=True)
         pdf.set_font("Arial", "B", 10)
         pdf.set_fill_color(*COLOR_FONDO_TABLA)
         pdf.set_text_color(0, 0, 0)
-        pdf.cell(50, 8, "Máquina", border=1, fill=True, align='C')
+        
+        # Ajustamos los anchos para que entre la 5ta columna en el ancho total de 190
+        pdf.cell(40, 8, "Máquina", border=1, fill=True, align='C')
         pdf.cell(60, 8, "Código Producto", border=1, fill=True, align='C')
-        pdf.cell(40, 8, "Real (Pzs/h)", border=1, fill=True, align='C')
-        pdf.cell(40, 8, "Estimado", border=1, fill=True, align='C')
+        pdf.cell(30, 8, "Real", border=1, fill=True, align='C')
+        pdf.cell(30, 8, "Estimado", border=1, fill=True, align='C')
+        pdf.cell(30, 8, "Diferencia", border=1, fill=True, align='C')
         pdf.ln()
         
         pdf.set_font("Arial", "", 10)
         for index, fila in comparativa_productos.iterrows():
-            pdf.cell(50, 8, str(fila['Máquina']), border=1, align='C')
+            pdf.cell(40, 8, str(fila['Máquina'])[:15], border=1, align='C')
             pdf.cell(60, 8, str(fila['Código Producto'])[:25], border=1, align='C')
-            pdf.cell(40, 8, str(fila['Real_Pzs_Hora']), border=1, align='C')
-            pdf.cell(40, 8, str(fila['Estimado_Pzs_Hora']), border=1, align='C')
+            pdf.cell(30, 8, str(fila['Real_Pzs_Hora']), border=1, align='C')
+            pdf.cell(30, 8, str(fila['Estimado_Pzs_Hora']), border=1, align='C')
+            
+            # --- EVALUAR COLOR DE LA DIFERENCIA ---
+            diferencia_val = fila['Diferencia']
+            if diferencia_val > 0:
+                pdf.set_text_color(0, 150, 0) # Verde
+            elif diferencia_val < 0:
+                pdf.set_text_color(200, 0, 0) # Rojo
+            else:
+                pdf.set_text_color(0, 0, 0)   # Negro
+                
+            # Escribir celda de diferencia
+            # Usamos '+' para indicar los positivos si deseas, o simplemente mostramos el valor
+            texto_diferencia = f"+{diferencia_val}" if diferencia_val > 0 else str(diferencia_val)
+            pdf.cell(30, 8, texto_diferencia, border=1, align='C')
+            
+            # Resetear a color negro para la siguiente fila
+            pdf.set_text_color(0, 0, 0) 
             pdf.ln()
             
         pdf.ln(5)
@@ -199,12 +242,11 @@ if url_ingresada:
         lista_todas_maquinas = promedio_por_hora['Máquina'].unique()
         
         for maquina_pdf in lista_todas_maquinas:
-            pdf.add_page() # Crea una hoja nueva para esta máquina
+            pdf.add_page() 
             pdf.set_font("Arial", "B", 14)
             pdf.set_text_color(*COLOR_TITULO)
             pdf.cell(190, 10, f"3. Rendimiento Histórico Diario: {maquina_pdf}", ln=True)
             
-            # Encabezados de tabla
             pdf.set_font("Arial", "B", 10)
             pdf.set_fill_color(*COLOR_FONDO_TABLA)
             pdf.set_text_color(0, 0, 0)
@@ -213,10 +255,8 @@ if url_ingresada:
             pdf.cell(50, 8, "Promedio (Pzs/h)", border=1, fill=True, align='C')
             pdf.ln()
             
-            # Filtramos los datos solo de esta máquina
             datos_maq_pdf = promedio_por_hora[promedio_por_hora['Máquina'] == maquina_pdf]
             
-            # Llenamos la tabla
             pdf.set_font("Arial", "", 10)
             for index, fila in datos_maq_pdf.iterrows():
                 pdf.cell(80, 8, str(fila['Máquina']), border=1, align='C')
@@ -226,36 +266,37 @@ if url_ingresada:
                 
             pdf.ln(5)
             
-            # --- CREAR GRÁFICO ESPECÍFICO PARA EL PDF ---
             fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4))
             ax_pdf.plot(datos_maq_pdf['Hora_Real'].astype(str) + "h", datos_maq_pdf['Promedio_Historico'], marker='o', color='#00509E', linewidth=2)
             ax_pdf.set_title(f'Rendimiento Hora a Hora - {maquina_pdf}')
             ax_pdf.set_ylabel('Piezas por Hora')
             ax_pdf.grid(True, linestyle='--', alpha=0.6)
             
-            # Guardamos la imagen con un nombre único basado en la máquina
             nombre_imagen_temp = f"temp_grafico_{maquina_pdf.replace(' ', '_').replace('/', '_')}.png"
             fig_pdf.savefig(nombre_imagen_temp, bbox_inches='tight')
             plt.close(fig_pdf)
             
-            # Pegamos la imagen en el PDF
             pdf.image(nombre_imagen_temp, w=170)
             
-            # Borramos la imagen inmediatamente para no llenar de basura el servidor
             if os.path.exists(nombre_imagen_temp):
                 os.remove(nombre_imagen_temp)
 
         # ==========================================
-        # 7. GENERACIÓN FINAL DEL ARCHIVO
+        # 7. GENERACIÓN FINAL DEL ARCHIVO Y DATOS CRUDOS
         # ==========================================
         nombre_pdf = "Reporte_Ejecutivo_Completo.pdf"
         pdf.output(nombre_pdf)
 
+        st.markdown("---")
         with open(nombre_pdf, "rb") as pdf_file:
             st.download_button("📥 Descargar Reporte Ejecutivo Completo (PDF)", data=pdf_file, file_name=nombre_pdf, mime="application/pdf")
             
         if os.path.exists("grafico_productos.png"):
             os.remove("grafico_productos.png")
+
+        st.write("")
+        with st.expander("Clic aquí para ver los datos originales (Fuente)"):
+            st.dataframe(df, use_container_width=True)
             
     except Exception as e:
         st.error(f"Error procesando los datos: {e}")
