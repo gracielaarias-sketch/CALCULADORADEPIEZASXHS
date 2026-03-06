@@ -24,14 +24,11 @@ if url_ingresada:
         # ==========================================
         # 1. LIMPIEZA Y CÁLCULOS BASE
         # ==========================================
-        # Eliminamos filas totalmente vacías
         df = df.dropna(how='all')
 
-        # --- CORRECCIÓN 1: Limpieza estricta de la columna Máquina ---
-        # Convertimos a texto, quitamos espacios y filtramos "None" o vacíos
+        # Limpieza estricta de la columna Máquina (Evita las máquinas fantasma)
         df['Máquina'] = df['Máquina'].astype(str).str.strip()
-        df = df[~df['Máquina'].isin(['nan', 'None', '', 'NaN'])]
-        # -------------------------------------------------------------
+        df = df[~df['Máquina'].str.lower().isin(['nan', 'none', '', 'null'])]
 
         columnas_num = ['Buenas', 'Retrabajo', 'Observadas', 'Tiempo Producción (Min)', 'Tiempo Ciclo', 'Hora']
         for col in columnas_num:
@@ -48,45 +45,53 @@ if url_ingresada:
         df['Horas_Decimal'] = df['Tiempo Producción (Min)'] / 60
 
         # ==========================================
-        # 2. CUADRO 1: GENERAL (LIMPIEZA DE "NONE")
+        # 2. CUADRO 1: GENERAL (LÓGICA SIMULTÁNEA)
         # ==========================================
         def calcular_bloque_hora(g):
             if g.empty:
-                return pd.Series({'Total_Piezas': 0.0, 'Total_Horas': 0.0, 'Cantidad_Productos': 0})
+                return pd.Series({'Total_Piezas': 0.0, 'Total_Horas': 0.0, 'Cantidad_Productos': 0, 'Ciclos_Maquina': 0.0})
             
             total_piezas = float(g['Total_Piezas_Fabricadas'].sum())
             
-            # Heurística de simultaneidad: ¿Cuántos códigos comparten el mismo tiempo exacto?
-            conteo_agrupado = g.groupby('Horas_Decimal')['Código Producto'].nunique()
-            cantidad_productos = int(min(conteo_agrupado.max(), 3)) if not conteo_agrupado.empty else 1
+            # Identificamos cantidad de productos en simultáneo (máximo 3)
+            cantidad_productos = int(min(g['Código Producto'].nunique(), 3))
             
-            # El tiempo real es la suma de los tiempos ÚNICOS registrados en ese bloque
-            total_horas = float(g['Horas_Decimal'].unique().sum())
+            # Ciclos Reales: Si hacemos 3 productos, 1 ciclo arroja 3 piezas. 
+            # Por ende, los ciclos son las piezas divididas por la cantidad de productos activos.
+            ciclos_maquina = total_piezas / cantidad_productos if cantidad_productos > 0 else 0.0
             
-            return pd.Series([total_piezas, total_horas, cantidad_productos], 
-                             index=['Total_Piezas', 'Total_Horas', 'Cantidad_Productos'])
+            # Tiempo Real de Máquina: Para evitar duplicar horas si hay simultaneidad,
+            # tomamos el tiempo reportado y lo dividimos por la cantidad de productos en ese bloque.
+            total_horas = float(g['Horas_Decimal'].sum() / cantidad_productos) if cantidad_productos > 0 else 0.0
+            
+            return pd.Series([total_piezas, total_horas, cantidad_productos, ciclos_maquina], 
+                             index=['Total_Piezas', 'Total_Horas', 'Cantidad_Productos', 'Ciclos_Maquina'])
 
-        # Aplicamos la función y nos aseguramos de no dejar filas con nulos
         despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora_Real', 'Orden_Hora']).apply(calcular_bloque_hora).reset_index()
         despliegue_hora = despliegue_hora.dropna(subset=['Total_Piezas', 'Total_Horas', 'Cantidad_Productos'])
 
+        # Cálculos por bloque
         despliegue_hora['Pzs_Hora_Bloque'] = np.where(despliegue_hora['Total_Horas'] > 0, 
                                                      despliegue_hora['Total_Piezas'] / despliegue_hora['Total_Horas'], 
                                                      0)
         
-        # Filtro estricto para las tablas
+        despliegue_hora['Ciclos_Hora_Bloque'] = np.where(despliegue_hora['Total_Horas'] > 0, 
+                                                        despliegue_hora['Ciclos_Maquina'] / despliegue_hora['Total_Horas'], 
+                                                        0)
+        
         despliegue_hora = despliegue_hora[(despliegue_hora['Cantidad_Productos'] > 0) & 
                                          (despliegue_hora['Total_Horas'] > 0) &
                                          (despliegue_hora['Pzs_Hora_Bloque'] > 0)]
 
+        # Nueva tabla resumen con Piezas y Ciclos
         resumen_general = despliegue_hora.groupby(['Máquina', 'Cantidad_Productos']).agg(
-            Promedio_General_Pzs_Hora=('Pzs_Hora_Bloque', 'mean')
+            Promedio_Pzs_Hora=('Pzs_Hora_Bloque', 'mean'),
+            Promedio_Ciclos_Hora=('Ciclos_Hora_Bloque', 'mean')
         ).reset_index().round(2)
 
         # ==========================================
-        # 3. CUADRO 2: REAL VS ESTIMADO (CORREGIDO)
+        # 3. CUADRO 2: REAL VS ESTIMADO 
         # ==========================================
-        # Usamos Suma Total de Piezas / Suma Total Horas para máxima precisión por producto
         comp_prod = df.groupby(['Máquina', 'Código Producto']).agg(
             Suma_Piezas=('Total_Piezas_Fabricadas', 'sum'),
             Suma_Horas=('Horas_Decimal', 'sum'),
@@ -96,17 +101,12 @@ if url_ingresada:
         comp_prod = comp_prod[comp_prod['Suma_Horas'] > 0]
         comp_prod['Real_Pzs_Hora'] = comp_prod['Suma_Piezas'] / comp_prod['Suma_Horas']
 
-        # --- CORRECCIÓN 2: Lógica de Tiempo de Ciclo ---
-        # Si el número es menor a 2 (ej. 0.175), asumimos que está en MINUTOS.
-        # Si es mayor o igual a 2, asumimos que está en SEGUNDOS.
+        # Cálculo directo: 60 dividido por el tiempo de ciclo en minutos
         comp_prod['Estimado_Pzs_Hora'] = np.where(
-            comp_prod['Promedio_Tiempo_Ciclo'] >= 2, 
-            3600 / comp_prod['Promedio_Tiempo_Ciclo'], # SEGUNDOS 
-            np.where(comp_prod['Promedio_Tiempo_Ciclo'] > 0, 
-                     60 / comp_prod['Promedio_Tiempo_Ciclo'], # MINUTOS
-                     0)
+            comp_prod['Promedio_Tiempo_Ciclo'] > 0, 
+            60 / comp_prod['Promedio_Tiempo_Ciclo'], 
+            0
         )
-        # -------------------------------------------------------------
         
         comp_prod['Diferencia'] = comp_prod['Real_Pzs_Hora'] - comp_prod['Estimado_Pzs_Hora']
         comp_prod = comp_prod[['Máquina', 'Código Producto', 'Real_Pzs_Hora', 'Estimado_Pzs_Hora', 'Diferencia']].round(2)
@@ -114,7 +114,7 @@ if url_ingresada:
         # ==========================================
         # 4. INTERFAZ Y PESTAÑAS
         # ==========================================
-        st.success("¡Cálculos finalizados! Se han corregido los tiempos de ciclo y promedios.")
+        st.success("¡Cálculos finalizados! Se han corregido los ciclos y limpiado la interfaz.")
         tab1, tab2, tab3, tab4 = st.tabs(["📈 General", "🎯 Real vs Estimado", "⏰ Histórico", "📅 Bitácora"])
 
         with tab1:
@@ -133,7 +133,6 @@ if url_ingresada:
                 use_container_width=True
             )
             
-            # Gráfico para reporte
             fig_p, ax_p = plt.subplots(figsize=(12, 5))
             datos_g = comp_prod.head(15)
             x = np.arange(len(datos_g))
@@ -167,10 +166,9 @@ if url_ingresada:
         pdf.add_page()
         pdf.set_font("Arial", "B", 18)
         pdf.set_text_color(*AZUL_TITULO)
-        pdf.cell(190, 10, "REPORTE DE PRODUCCIÓN EJECUTIVO", 0, 1, 'C')
+        pdf.cell(190, 10, "REPORTE DE PRODUCCION EJECUTIVO", 0, 1, 'C')
         pdf.ln(5)
 
-        # Tabla Resumen
         pdf.set_font("Arial", "B", 12)
         pdf.cell(190, 10, "1. Rendimiento por Producto", 0, 1)
         pdf.set_font("Arial", "B", 10)
@@ -188,13 +186,18 @@ if url_ingresada:
             pdf.cell(60, 7, str(r['Código Producto'])[:25], 1)
             pdf.cell(30, 7, f"{r['Real_Pzs_Hora']:.2f}", 1, 0, 'C')
             pdf.cell(30, 7, f"{r['Estimado_Pzs_Hora']:.2f}", 1, 0, 'C')
-            pdf.set_text_color(0, 150, 0) if r['Diferencia'] > 0 else pdf.set_text_color(200, 0, 0)
+            
+            # SOLUCIÓN AL BUG DE STREAMLIT (Adiós "None")
+            if r['Diferencia'] > 0:
+                pdf.set_text_color(0, 150, 0)
+            else:
+                pdf.set_text_color(200, 0, 0)
+                
             pdf.cell(30, 7, f"{r['Diferencia']:.2f}", 1, 1, 'C')
             pdf.set_text_color(0,0,0)
 
         pdf.image("temp_prod.png", x=10, y=pdf.get_y()+10, w=180)
 
-        # Páginas por Máquina
         for m_id in prom_h['Máquina'].unique():
             pdf.add_page()
             pdf.set_font("Arial", "B", 14)
@@ -231,7 +234,6 @@ if url_ingresada:
         if os.path.exists("temp_prod.png"):
             os.remove("temp_prod.png")
 
-        # Datos fuente al final
         st.write("")
         with st.expander("Ver datos originales (Fuente)"):
             st.dataframe(df, use_container_width=True)
