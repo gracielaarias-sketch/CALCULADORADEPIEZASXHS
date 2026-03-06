@@ -1,158 +1,204 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import os
 from fpdf import FPDF
 
 st.set_page_config(page_title="Panel de Producción", layout="wide")
-st.title("📊 Análisis de Producción y Productividad")
+st.title("📊 Análisis de Producción vs Estimado")
 
-# Pedimos el link al usuario
 url_ingresada = st.text_input("Pega aquí el enlace de tu Google Sheet:")
 
 if url_ingresada:
     try:
-        # Truco para leer el Google Sheet como CSV
         url_limpia = url_ingresada.split("/edit")[0]
         url_csv = f"{url_limpia}/export?format=csv"
         
         st.info("Obteniendo y calculando datos...")
         df = pd.read_csv(url_csv)
         
-        # ==========================================
-        # 1. EXPANDER CON LOS DATOS FUENTE
-        # ==========================================
         with st.expander("👀 Clic aquí para ver los datos originales (Fuente)"):
             st.dataframe(df, use_container_width=True)
 
         # ==========================================
-        # 2. PROCESAMIENTO BÁSICO
+        # 1. LIMPIEZA Y CÁLCULOS BASE
         # ==========================================
-        columnas_a_sumar = ['Buenas', 'Retrabajo', 'Observadas', 'Tiempo Producción (Min)']
-        for col in columnas_a_sumar:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        columnas_num = ['Buenas', 'Retrabajo', 'Observadas', 'Tiempo Producción (Min)', 'Tiempo Ciclo', 'Hora']
+        for col in columnas_num:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
+        # Ajuste de Hora (Restar 1 para que empiece a las 6)
+        df['Hora_Real'] = df['Hora'].apply(lambda x: int(x - 1) if x > 0 else 23)
+        # Columna oculta para ordenar cronológicamente desde las 6 AM
+        df['Orden_Hora'] = df['Hora_Real'].apply(lambda x: x if x >= 6 else x + 24)
+
         df['Total_Piezas_Fabricadas'] = df['Buenas'] + df['Retrabajo'] + df['Observadas']
         df['Horas'] = df['Tiempo Producción (Min)'] / 60
+        
+        # Cálculo del Estimado (60 / Tiempo Ciclo)
+        df['Piezas_Estimadas_Hora'] = np.where(df['Tiempo Ciclo'] > 0, 60 / df['Tiempo Ciclo'], 0)
 
         # ==========================================
-        # 3. BASE DE DATOS: HORA A HORA (POR FECHA)
+        # 2. AGRUPACIÓN HORA A HORA (CON ESTIMADO)
         # ==========================================
-        despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora']).agg(
+        despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora_Real', 'Orden_Hora']).agg(
             Total_Piezas=('Total_Piezas_Fabricadas', 'sum'),
             Total_Horas=('Horas', 'sum'),
             Cantidad_Productos=('Código Producto', 'nunique'),
-            Codigos_Fabricados=('Código Producto', lambda x: ', '.join(x.dropna().unique().astype(str)))
+            Promedio_Estimado_Local=('Piezas_Estimadas_Hora', 'mean') # Promedio del estimado en esa hora
         ).reset_index()
 
-        # Calculamos la velocidad
-        despliegue_hora['Piezas_por_Hora'] = np.where(
+        despliegue_hora['Piezas_por_Hora_Real'] = np.where(
             despliegue_hora['Total_Horas'] > 0, 
-            despliegue_hora['Total_Piezas'] / despliegue_hora['Total_Horas'], 
-            0
+            despliegue_hora['Total_Piezas'] / despliegue_hora['Total_Horas'], 0
         )
-        despliegue_hora['Piezas_por_Hora'] = despliegue_hora['Piezas_por_Hora'].round(2)
         
-        # FILTROS: 1 a 3 productos y eliminar los ceros
         despliegue_hora = despliegue_hora[despliegue_hora['Cantidad_Productos'].isin([1, 2, 3])]
-        despliegue_hora = despliegue_hora[despliegue_hora['Piezas_por_Hora'] > 0]
+        despliegue_hora = despliegue_hora[despliegue_hora['Piezas_por_Hora_Real'] > 0]
 
         # ==========================================
-        # 4. CÁLCULOS SECUNDARIOS PARA PESTAÑAS
+        # 3. CÁLCULO GENERAL Y COMPARACIÓN
         # ==========================================
-        
-        # A) Promedio General por Máquina y Cantidad de Productos (Para Pestaña 1)
         resumen_general = despliegue_hora.groupby(['Máquina', 'Cantidad_Productos']).agg(
-            Promedio_General_Piezas_Hora=('Piezas_por_Hora', 'mean')
-        ).reset_index()
-        resumen_general['Promedio_General_Piezas_Hora'] = resumen_general['Promedio_General_Piezas_Hora'].round(2)
+            Real_Pzs_Hora=('Piezas_por_Hora_Real', 'mean'),
+            Estimado_Pzs_Hora=('Promedio_Estimado_Local', 'mean')
+        ).reset_index().round(2)
 
-        # B) Promedio Histórico por Hora del Día (Para Pestaña 2)
-        # Agrupamos solo por Máquina y Hora (ignorando la fecha para sacar el promedio histórico de esa hora)
-        promedio_por_hora_dia = despliegue_hora.groupby(['Máquina', 'Hora']).agg(
-            Promedio_Historico_Hora=('Piezas_por_Hora', 'mean')
-        ).reset_index()
-        promedio_por_hora_dia['Promedio_Historico_Hora'] = promedio_por_hora_dia['Promedio_Historico_Hora'].round(2)
+        # Promedio Histórico por Hora (Ordenado lógicamente)
+        promedio_por_hora = despliegue_hora.groupby(['Máquina', 'Hora_Real', 'Orden_Hora']).agg(
+            Promedio_Historico=('Piezas_por_Hora_Real', 'mean')
+        ).reset_index().sort_values(by=['Máquina', 'Orden_Hora']).round(2)
 
         # ==========================================
-        # 5. MOSTRAR RESULTADOS EN 3 PESTAÑAS
+        # 4. PESTAÑAS Y GRÁFICOS MATPLOTLIB
         # ==========================================
-        st.success("¡Cálculos finalizados exitosamente!")
+        st.success("¡Cálculos finalizados!")
+        tab1, tab2, tab3 = st.tabs(["📈 General vs Estimado", "⏰ Histórico por Hora", "📅 Bitácora"])
         
-        tab1, tab2, tab3 = st.tabs([
-            "📈 1. Cálculo General por Máquina", 
-            "⏰ 2. Promedio Histórico por Hora", 
-            "📅 3. Despliegue por Fecha"
-        ])
-        
-        # PESTAÑA 1
         with tab1:
-            st.subheader("Promedio Real de Piezas por Hora (según cantidad de productos)")
+            st.subheader("Producción Real vs Estimada (según cantidad de productos)")
             st.dataframe(resumen_general, use_container_width=True)
             
-        # PESTAÑA 2: Selector de máquina y gráfico
-        with tab2:
-            st.subheader("Rendimiento Promedio según la Hora del Día")
-            
-            # Extraemos las máquinas disponibles y creamos el selector
-            lista_maquinas = promedio_por_hora_dia['Máquina'].unique()
-            maquina_seleccionada = st.selectbox("Selecciona la Máquina a analizar:", lista_maquinas)
-            
-            # Filtramos los datos solo para la máquina seleccionada
-            datos_maquina = promedio_por_hora_dia[promedio_por_hora_dia['Máquina'] == maquina_seleccionada]
-            datos_maquina = datos_maquina.sort_values(by='Hora')
-            
-            # Mostramos el gráfico de barras (muy útil para ver picos y caídas de producción)
-            st.bar_chart(datos_maquina.set_index('Hora')['Promedio_Historico_Hora'])
-            
-            # Mostramos la tabla debajo del gráfico
-            st.dataframe(datos_maquina, use_container_width=True)
+            # Gráfico Comparativo
+            fig_gen, ax_gen = plt.subplots(figsize=(10, 5))
+            x = np.arange(len(resumen_general))
+            width = 0.35
+            ax_gen.bar(x - width/2, resumen_general['Real_Pzs_Hora'], width, label='Real', color='#1f77b4')
+            ax_gen.bar(x + width/2, resumen_general['Estimado_Pzs_Hora'], width, label='Estimado', color='#aec7e8')
+            ax_gen.set_ylabel('Piezas por Hora')
+            ax_gen.set_title('Real vs Estimado por Máquina y N° Productos')
+            ax_gen.set_xticks(x)
+            etiquetas = resumen_general['Máquina'] + " (" + resumen_general['Cantidad_Productos'].astype(str) + " prod)"
+            ax_gen.set_xticklabels(etiquetas, rotation=45, ha="right")
+            ax_gen.legend()
+            st.pyplot(fig_gen)
+            fig_gen.savefig("grafico_general.png", bbox_inches='tight')
 
-        # PESTAÑA 3: Datos crudos hora a hora por día
+        with tab2:
+            st.subheader("Rendimiento Histórico desde las 6:00 AM")
+            lista_maquinas = promedio_por_hora['Máquina'].unique()
+            maquina_seleccionada = st.selectbox("Máquina:", lista_maquinas)
+            
+            datos_maq = promedio_por_hora[promedio_por_hora['Máquina'] == maquina_seleccionada]
+            
+            # Gráfico de la Máquina Seleccionada
+            fig_hor, ax_hor = plt.subplots(figsize=(10, 4))
+            ax_hor.plot(datos_maq['Hora_Real'].astype(str) + "h", datos_maq['Promedio_Historico'], marker='o', color='#00509E', linewidth=2)
+            ax_hor.set_title(f'Rendimiento Hora a Hora - {maquina_seleccionada}')
+            ax_hor.set_ylabel('Piezas por Hora')
+            ax_hor.grid(True, linestyle='--', alpha=0.6)
+            st.pyplot(fig_hor)
+            fig_hor.savefig("grafico_hora.png", bbox_inches='tight')
+            
+            st.dataframe(datos_maq[['Máquina', 'Hora_Real', 'Promedio_Historico']], use_container_width=True)
+
         with tab3:
-            st.subheader("Bitácora Diaria: Producción por cada Fecha y Hora")
-            st.dataframe(despliegue_hora.sort_values(by=['Fecha', 'Máquina', 'Hora']), use_container_width=True)
+            st.subheader("Bitácora (No se incluye en el PDF)")
+            st.dataframe(despliegue_hora.sort_values(by=['Fecha', 'Máquina', 'Orden_Hora']), use_container_width=True)
 
         # ==========================================
-        # 6. CREACIÓN DEL REPORTE PDF
+        # 5. CREACIÓN DEL PDF ESTILIZADO (AZUL Y CON TABLAS)
         # ==========================================
         pdf = FPDF()
         pdf.add_page()
         
-        pdf.set_font("Arial", "B", 16)
-        pdf.cell(200, 10, txt="Informe de Producción", ln=True, align='C')
-        pdf.cell(200, 5, txt="", ln=True) 
+        # Colores Corporativos (Azules)
+        COLOR_TITULO = (0, 51, 102) # Azul oscuro
+        COLOR_FONDO_TABLA = (204, 229, 255) # Azul clarito
         
-        # 1. Resumen General
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(200, 10, txt="1. Promedio General por Máquina:", ln=True)
-        pdf.set_font("Arial", size=10)
+        # Título
+        pdf.set_font("Arial", "B", 18)
+        pdf.set_text_color(*COLOR_TITULO)
+        pdf.cell(190, 10, txt="REPORTE DE PRODUCCIÓN Y RENDIMIENTO", ln=True, align='C')
+        pdf.ln(5)
+        
+        # --- SECCIÓN 1: GENERAL VS ESTIMADO ---
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(190, 10, txt="1. Comparativa General vs Estimado", ln=True)
+        
+        # Encabezados de Tabla 1
+        pdf.set_font("Arial", "B", 10)
+        pdf.set_fill_color(*COLOR_FONDO_TABLA)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(60, 8, "Máquina", border=1, fill=True, align='C')
+        pdf.cell(30, 8, "Productos", border=1, fill=True, align='C')
+        pdf.cell(40, 8, "Real (Pzs/h)", border=1, fill=True, align='C')
+        pdf.cell(40, 8, "Estimado (Pzs/h)", border=1, fill=True, align='C')
+        pdf.ln()
+        
+        # Filas de Tabla 1
+        pdf.set_font("Arial", "", 10)
         for index, fila in resumen_general.iterrows():
-            texto = f"Máquina: {fila['Máquina']} | Productos: {fila['Cantidad_Productos']} | Promedio/h: {fila['Promedio_General_Piezas_Hora']}"
-            pdf.cell(200, 8, txt=texto, ln=True)
+            pdf.cell(60, 8, str(fila['Máquina']), border=1, align='C')
+            pdf.cell(30, 8, str(fila['Cantidad_Productos']), border=1, align='C')
+            pdf.cell(40, 8, str(fila['Real_Pzs_Hora']), border=1, align='C')
+            pdf.cell(40, 8, str(fila['Estimado_Pzs_Hora']), border=1, align='C')
+            pdf.ln()
             
-        pdf.cell(200, 5, txt="", ln=True) 
+        pdf.ln(5)
+        # Insertar Gráfico General
+        pdf.image("grafico_general.png", w=170)
+        pdf.ln(10)
         
-        # 2. Bitácora (Pestaña 3)
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(200, 10, txt="2. Bitácora Histórica (Hora a Hora):", ln=True)
-        pdf.set_font("Arial", size=10)
-        for index, fila in despliegue_hora.iterrows():
-            texto = f"Fecha: {fila['Fecha']} | Hora: {fila['Hora']} | Máquina: {fila['Máquina']} | Pzs/h: {fila['Piezas_por_Hora']}"
-            pdf.cell(200, 8, txt=texto, ln=True)
+        # --- SECCIÓN 2: HISTÓRICO HORA A HORA ---
+        pdf.add_page() # Nueva página para que no se corte feo
+        pdf.set_font("Arial", "B", 14)
+        pdf.set_text_color(*COLOR_TITULO)
+        pdf.cell(190, 10, f"2. Rendimiento Hora a Hora ({maquina_seleccionada})", ln=True)
+        
+        # Encabezados de Tabla 2
+        pdf.set_font("Arial", "B", 10)
+        pdf.set_fill_color(*COLOR_FONDO_TABLA)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(80, 8, "Máquina", border=1, fill=True, align='C')
+        pdf.cell(40, 8, "Hora", border=1, fill=True, align='C')
+        pdf.cell(50, 8, "Promedio (Pzs/h)", border=1, fill=True, align='C')
+        pdf.ln()
+        
+        # Filas de Tabla 2
+        pdf.set_font("Arial", "", 10)
+        for index, fila in datos_maq.iterrows():
+            pdf.cell(80, 8, str(fila['Máquina']), border=1, align='C')
+            pdf.cell(40, 8, f"{fila['Hora_Real']}:00", border=1, align='C')
+            pdf.cell(50, 8, str(fila['Promedio_Historico']), border=1, align='C')
+            pdf.ln()
             
-        nombre_archivo = "informe_produccion_limpio.pdf"
-        pdf.output(nombre_archivo)
+        pdf.ln(5)
+        # Insertar Gráfico por Hora
+        pdf.image("grafico_hora.png", w=170)
 
-        # Botón de Descarga
-        with open(nombre_archivo, "rb") as pdf_file:
-            st.download_button(
-                label="📥 Descargar Informe Completo en PDF",
-                data=pdf_file,
-                file_name="Reporte_Produccion_Limpiado.pdf",
-                mime="application/pdf"
-            )
+        # Generar y descargar
+        nombre_pdf = "Reporte_Ejecutivo.pdf"
+        pdf.output(nombre_pdf)
+
+        with open(nombre_pdf, "rb") as pdf_file:
+            st.download_button("📥 Descargar Reporte Ejecutivo (PDF)", data=pdf_file, file_name=nombre_pdf, mime="application/pdf")
             
-    except KeyError as e:
-        st.error(f"Error: No se encontró la columna {e}. Revisa los encabezados de tu Google Sheet.")
+        # Limpiar imágenes temporales para que no saturen tu servidor
+        os.remove("grafico_general.png")
+        os.remove("grafico_hora.png")
+            
     except Exception as e:
-        st.error(f"Hubo un error inesperado. Detalle: {e}")
+        st.error(f"Error procesando los datos: {e}")
