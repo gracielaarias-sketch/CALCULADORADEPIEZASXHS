@@ -64,27 +64,22 @@ try:
         lambda x: 'Cell 15 Famma' if 'Cell 15A' in x or 'Cell 15B' in x else x
     )
 
-    # Opciones de máquina (Selector múltiple) - Ahora mostrará Cell 15 Famma unificada
     lista_maquinas = sorted(df_filtrado_fecha['Máquina'].unique().tolist())
     
     maquinas_seleccionadas = st.multiselect(
         "⚙️ 2. Selecciona la(s) Máquina(s) a incluir en el PDF:", 
         options=lista_maquinas,
-        default=lista_maquinas # Por defecto selecciona todas
+        default=lista_maquinas
     )
 
     if not maquinas_seleccionadas:
         st.warning("Por favor, selecciona al menos una máquina para generar el reporte.")
         st.stop()
 
-    # Filtrar el DataFrame final por las máquinas seleccionadas
     df = df_filtrado_fecha[df_filtrado_fecha['Máquina'].isin(maquinas_seleccionadas)].copy()
 
-    st.success(f"Datos listos para procesar ({len(df)} registros encontrados).")
-    st.divider()
-
     # ==========================================
-    # 3. CÁLCULOS BASE (Ocultos)
+    # 3. CÁLCULOS BASE
     # ==========================================
     with st.spinner("Procesando datos y calculando métricas..."):
         columnas_num = ['Buenas', 'Retrabajo', 'Observadas', 'Tiempo Producción (Min)', 'Tiempo Ciclo', 'Hora']
@@ -103,16 +98,13 @@ try:
             if g.empty: return pd.Series({'Total_Piezas': 0.0, 'Total_Horas': 0.0, 'Cantidad_Productos': 0, 'Ciclos_Maquina': 0.0})
             total_piezas = float(g['Total_Piezas_Fabricadas'].sum())
             cantidad_productos = int(g['Código Producto'].nunique())
-            # Al estar unificadas 15A y 15B, toman el tiempo productivo registrado en esa hora
             total_horas = float(g['Horas_Decimal'].iloc[0]) if not g.empty else 0.0
             ciclos_maquina = total_piezas / cantidad_productos if cantidad_productos > 0 else 0.0
             return pd.Series([total_piezas, total_horas, cantidad_productos, ciclos_maquina], 
                              index=['Total_Piezas', 'Total_Horas', 'Cantidad_Productos', 'Ciclos_Maquina'])
 
         despliegue_hora = df.groupby(['Fecha', 'Máquina', 'Hora_Real', 'Orden_Hora', 'Horas_Decimal']).apply(calcular_sub_bloque).reset_index()
-        despliegue_hora = despliegue_hora.dropna(subset=['Total_Piezas', 'Total_Horas', 'Cantidad_Productos'])
         despliegue_hora['Pzs_Hora_Bloque'] = np.where(despliegue_hora['Total_Horas'] > 0, despliegue_hora['Total_Piezas'] / despliegue_hora['Total_Horas'], 0)
-        despliegue_hora['Ciclos_Hora_Bloque'] = np.where(despliegue_hora['Total_Horas'] > 0, despliegue_hora['Ciclos_Maquina'] / despliegue_hora['Total_Horas'], 0)
         despliegue_hora = despliegue_hora[(despliegue_hora['Cantidad_Productos'] > 0) & (despliegue_hora['Total_Horas'] > 0) & (despliegue_hora['Pzs_Hora_Bloque'] > 0)]
 
         resumen_general = despliegue_hora.groupby(['Máquina', 'Cantidad_Productos']).agg(
@@ -148,7 +140,6 @@ try:
         
         pdf.set_font("Arial", "I", 11)
         pdf.set_text_color(100, 100, 100)
-        
         texto_maquinas = "Multiples Seleccionadas" if len(maquinas_seleccionadas) > 1 else maquinas_seleccionadas[0]
         pdf.cell(190, 8, f"Periodo: {inicio} al {fin} | Maquina(s): {texto_maquinas}", 0, 1, 'C')
         pdf.ln(5)
@@ -190,14 +181,13 @@ try:
             pdf.cell(25, 7, f"{r['Real_Pzs_Hora']:.2f}", 1, 0, 'C')
             pdf.cell(25, 7, f"{r['Estimado_Pzs_Hora']:.2f}", 1, 0, 'C')
             
-            # Color en Diferencia
             if r['Diferencia'] > 0:
                 pdf.set_text_color(0, 150, 0)
                 diff_text = f"+{r['Diferencia']:.2f}"
             else:
                 pdf.set_text_color(200, 0, 0)
                 diff_text = f"{r['Diferencia']:.2f}"
-                
+            
             pdf.cell(25, 7, diff_text, 1, 1, 'C')
             pdf.set_text_color(0,0,0)
         pdf.ln(5)
@@ -211,7 +201,6 @@ try:
             pdf.set_font("Arial", "B", 12)
             pdf.cell(190, 10, f"3. Rendimiento Historico Diario: {m_id}", 0, 1)
             
-            # Tabla del histórico
             pdf.set_font("Arial", "B", 10)
             pdf.set_fill_color(*AZUL_FONDO)
             pdf.cell(70, 8, "Maquina", 1, 0, 'C', True)
@@ -224,37 +213,40 @@ try:
                 pdf.cell(50, 7, f"{r['Hora_Real']}:00", 1, 0, 'C')
                 pdf.cell(70, 7, f"{r['P']:.2f}", 1, 1, 'C')
             
-            # Gráfico temporal
+            # --- CORRECCIÓN DE IMAGEN ---
+            # Limpiamos el nombre de la máquina para que sea un nombre de archivo válido
+            nombre_limpio_img = "".join(filter(str.isalnum, m_id))
+            t_name = os.path.join(os.getcwd(), f"chart_{nombre_limpio_img}.png")
+
             fig_t, ax_t = plt.subplots(figsize=(10, 3.5))
             ax_t.plot(dat_pdf['Hora_Real'].astype(str) + ":00", dat_pdf['P'], marker='o', color='#00509E')
             ax_t.set_title(f"Tendencia - {m_id}")
             ax_t.set_ylabel("Promedio (Pzs/h)")
             ax_t.grid(True, linestyle='--', alpha=0.6)
             
-            t_name = f"t_{m_id}.png".replace(" ","").replace("/","")
-            fig_t.savefig(t_name, bbox_inches='tight')
-            plt.close(fig_t)
-            
-            pdf.ln(5)
-            pdf.image(t_name, x=15, w=180)
-            if os.path.exists(t_name):
-                os.remove(t_name)
+            try:
+                fig_t.savefig(t_name, bbox_inches='tight')
+                plt.close(fig_t)
+                pdf.ln(5)
+                pdf.image(t_name, x=15, w=180)
+                
+                # Borramos el temporal inmediatamente después de usarlo en el PDF
+                if os.path.exists(t_name):
+                    os.remove(t_name)
+            except Exception as e_img:
+                st.error(f"Error al generar imagen para {m_id}: {e_img}")
 
-        # ==========================================
-        # DESCARGA DEL ARCHIVO (CON FECHAS DINÁMICAS)
-        # ==========================================
-        # Formateamos las fechas de YYYY-MM-DD a un string limpio
+        # Finalización del PDF
         fecha_str = f"{inicio.strftime('%d%m%y')}_al_{fin.strftime('%d%m%y')}"
-        
         if len(maquinas_seleccionadas) > 1:
             nombre_archivo = f"Reporte_Produccion_Multi_{fecha_str}.pdf"
         else:
-            nombre_limpio = maquinas_seleccionadas[0].replace(' ', '_')
+            nombre_limpio = "".join(filter(str.isalnum, maquinas_seleccionadas[0]))
             nombre_archivo = f"Reporte_Produccion_{nombre_limpio}_{fecha_str}.pdf"
             
         pdf.output(nombre_archivo)
 
-    # Botón gigante y claro para la descarga final
+    # Botón de descarga
     with open(nombre_archivo, "rb") as f:
         st.download_button(
             label="📥 Descargar Reporte Ejecutivo en PDF", 
@@ -264,6 +256,7 @@ try:
             use_container_width=True
         )
 
+    # Limpieza final del archivo PDF local
     if os.path.exists(nombre_archivo):
         os.remove(nombre_archivo)
 
